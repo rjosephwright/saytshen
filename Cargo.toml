@@ -1,0 +1,16 @@
+[package]
+name = "saytshen"
+version = "0.1.0"
+authors = ["Joseph Wright <rjosephwright@gmail.com>"]
+build = "build.rs"
+
+[build-dependencies]
+serde_codegen = "0.8"
+
+[dependencies]
+clap = "2"
+csv = "0.15"
+yaml-rust = "*"
+serde = "0.8"
+serde_yaml = "0.5"
+rustc-serialize = "0.3"
