@@ -1,6 +1,8 @@
 # saytshen
 A tool for running security compliance scans.
 
+[![Build Status](https://travis-ci.org/rjosephwright/saytshen.svg?branch=master)](https://travis-ci.org/rjosephwright/saytshen)
+
 ```
 USAGE:
     saytshen scan [OPTIONS]
