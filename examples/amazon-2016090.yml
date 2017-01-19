@@ -3,12 +3,9 @@
   description: Ensure mounting of cramfs filesystems is disabled
   audit:
     - run: modprobe -n -v cramfs | grep 'install /bin/true'
-      expect: foo
     - run: |
         lsmod | grep cramfs
         [ $? -eq 1 ]
-      expect: foo
-  skip: todo
 
 - section: 1.1.1.2
   description: Ensure mounting of freevxfs filesystems is disabled
@@ -69,7 +66,7 @@
 - section: 1.1.2
   description: Ensure separate partition exists for /tmp
   audit:
-    - run: mount | grep -E 'tmpfs on /run type tmpfs \(([a-z0-9=\-]+)+(,[a-z0-9=\-]+)*\)'
+    - run: mount | grep -E 'tmpfs on /tmp type tmpfs \(([a-z0-9=\-]+)+(,[a-z0-9=\-]+)*\)'
   skip: EC2 instances are not partitioned
 
 - section: 1.1.3
