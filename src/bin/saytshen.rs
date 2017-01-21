@@ -9,7 +9,7 @@ use saytshen::scan;
 
 fn main() {
     let app = App::new("saytshen")
-        .version("1.0")
+        .version(saytshen::VERSION)
         .author("Joseph Wright <rjosephwright@gmail.com>")
         .about("Scans systems for compliance")
         .subcommand(SubCommand::with_name("scan")
