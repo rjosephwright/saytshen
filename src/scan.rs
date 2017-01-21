@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path;
@@ -7,33 +8,6 @@ use csv;
 use serde_yaml;
 
 include!(concat!(env!("OUT_DIR"), "/serde_types.rs"));
-
-impl Benchmark {
-    fn expand(&self) -> Vec<BenchmarkStep> {
-        self.audit.iter()
-            .map(|a| {
-                BenchmarkStep {
-                    section: self.section.clone(),
-                    description: self.description.clone(),
-                    audit: a.clone(),
-                    mode: self.mode.clone(),
-                    skip: self.skip.clone(),
-                }
-            })
-            .collect::<Vec<_>>()
-    }
-}
-
-// Like Benchmark except there is just one audit step
-// instead of a vector of them.
-#[derive(Debug)]
-struct BenchmarkStep {
-    section: String,
-    description: String,
-    audit: AuditStep,
-    mode: Option<Mode>,
-    skip: Option<String>,
-}
 
 #[derive(Debug, RustcEncodable)]
 struct BenchmarkResult {
@@ -72,7 +46,7 @@ fn load_benchmarks(path: &str) -> Result<Vec<Benchmark>, AuditError> {
     open(path).and_then(parse)
 }
 
-fn run_script(script: String) -> Result<process::Output, AuditError> {
+fn run_script(script: &String) -> Result<process::Output, AuditError> {
     process::Command::new("/bin/sh")
         .arg("-c")
         .arg(script)
@@ -83,26 +57,42 @@ fn run_script(script: String) -> Result<process::Output, AuditError> {
         .and_then(|child| child.wait_with_output().map_err(AuditError::IoError))
 }
 
-fn run_benchmark(step: &BenchmarkStep) -> Result<BenchmarkResult, AuditError> {
-    let script = step.audit.run.clone();
-    run_script(script).and_then(|output| {
-        Ok(BenchmarkResult {
+fn run_benchmark(step: &Benchmark) -> Result<Vec<BenchmarkResult>, AuditError> {
+    let scripts = step.audit.iter().map(|a| &a.run);
+    let mut outputs = HashMap::new();
+    for script in scripts {
+        let output = run_script(script)?;
+        outputs.insert(script, output);
+    }
+
+    let mode = step.mode.unwrap_or(Mode::All);
+    let should_skip = !step.skip.clone().unwrap_or("".to_string()).is_empty();
+    let passed = should_skip || match mode {
+        Mode::All => outputs.values().all(|o| o.status.success()),
+        Mode::Any => outputs.values().any(|o| o.status.success()),
+    };
+
+    let results = outputs.iter().map(|(script, output)| {
+        BenchmarkResult {
             section: step.section.clone(),
             description: step.description.clone(),
-            run: step.audit.run.clone(),
-            passed: output.status.success(),
+            run: script.to_string(),
+            passed: passed,
             output: String::from_utf8(output.stdout.clone()).ok(),
             error: String::from_utf8(output.stderr.clone()).ok(),
             skip: step.skip.clone(),
-        })
-    })
+        }
+    }).collect::<Vec<_>>();
+
+    Ok(results)
 }
 
-fn run_benchmarks(steps: &Vec<BenchmarkStep>) -> Result<Vec<BenchmarkResult>, AuditError> {
+fn run_benchmarks(benchmarks: &Vec<Benchmark>) -> Result<Vec<BenchmarkResult>, AuditError> {
     let mut results = Vec::new();
-    for step in steps {
-        let result = run_benchmark(&step)?;
-        results.push(result);
+    for benchmark in benchmarks {
+        for result in run_benchmark(&benchmark)? {
+            results.push(result);
+        }
     }
     Ok(results)
 }
@@ -121,12 +111,7 @@ fn write_report(results: &Vec<BenchmarkResult>) -> Result<(), AuditError> {
 
 pub fn run_scan(spec: &str) -> Result<(), AuditError> {
     load_benchmarks(spec)
-        .and_then(|benchmarks| {
-            // Flatten benchmarks with multiple steps into a vector of
-            // single benchmark steps, for uniform error handling.
-            Ok(benchmarks.iter().flat_map(|b| b.expand()).collect::<Vec<_>>())
-        })
-        .and_then(|steps| run_benchmarks(&steps))
+        .and_then(|benchmarks| run_benchmarks(&benchmarks))
         .and_then(|results| write_report(&results).and(Ok(results)))
         .and_then(|results| {
             let passed = results.iter().all(|r| r.passed);
