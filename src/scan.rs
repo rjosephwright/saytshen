@@ -66,7 +66,7 @@ fn run_benchmark(step: &Benchmark) -> Result<Vec<BenchmarkResult>, AuditError> {
     }
 
     let mode = step.mode.unwrap_or(Mode::All);
-    let should_skip = !step.skip.clone().unwrap_or("".to_string()).is_empty();
+    let should_skip = step.skip.is_some();
     let passed = should_skip || match mode {
         Mode::All => outputs.values().all(|o| o.status.success()),
         Mode::Any => outputs.values().any(|o| o.status.success()),
@@ -97,8 +97,8 @@ fn run_benchmarks(benchmarks: &Vec<Benchmark>) -> Result<Vec<BenchmarkResult>, A
     Ok(results)
 }
 
-fn write_report(results: &Vec<BenchmarkResult>) -> Result<(), AuditError> {
-    let mut writer = csv::Writer::from_file(path::Path::new("results.csv"))?;
+fn write_report(results: &Vec<BenchmarkResult>, output: &str) -> Result<(), AuditError> {
+    let mut writer = csv::Writer::from_file(path::Path::new(output))?;
     let headers = vec![
         "Section", "Description", "Run", "Passed", "Output", "Error", "Skip"
     ];
@@ -109,10 +109,10 @@ fn write_report(results: &Vec<BenchmarkResult>) -> Result<(), AuditError> {
     Ok(())
 }
 
-pub fn run_scan(spec: &str) -> Result<(), AuditError> {
+pub fn run_scan(spec: &str, output: &str) -> Result<(), AuditError> {
     load_benchmarks(spec)
         .and_then(|benchmarks| run_benchmarks(&benchmarks))
-        .and_then(|results| write_report(&results).and(Ok(results)))
+        .and_then(|results| write_report(&results, output).and(Ok(results)))
         .and_then(|results| {
             let passed = results.iter().all(|r| r.passed);
             match passed {
