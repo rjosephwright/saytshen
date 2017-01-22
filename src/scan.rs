@@ -66,7 +66,7 @@ fn run_benchmark(step: &Benchmark) -> Result<Vec<BenchmarkResult>, AuditError> {
     }
 
     let mode = step.mode.unwrap_or(Mode::All);
-    let should_skip = !step.skip.clone().unwrap_or("".to_string()).is_empty();
+    let should_skip = step.skip.is_some();
     let passed = should_skip || match mode {
         Mode::All => outputs.values().all(|o| o.status.success()),
         Mode::Any => outputs.values().any(|o| o.status.success()),
