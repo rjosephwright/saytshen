@@ -17,6 +17,7 @@ fn main() {
                          .short("s")
                          .long("spec")
                          .takes_value(true)
+                         .required(true)
                          .help("Specification for scan"))
                     .arg(Arg::with_name("output")
                          .short("o")
