@@ -2,38 +2,13 @@ use std::fs;
 use std::io;
 use std::path;
 use std::process;
+use std::string;
 
 use csv;
+use regex;
 use serde_yaml;
 
 include!(concat!(env!("OUT_DIR"), "/serde_types.rs"));
-
-impl Benchmark {
-    fn expand(&self) -> Vec<BenchmarkStep> {
-        self.audit.iter()
-            .map(|a| {
-                BenchmarkStep {
-                    section: self.section.clone(),
-                    description: self.description.clone(),
-                    audit: a.clone(),
-                    mode: self.mode.clone(),
-                    skip: self.skip.clone(),
-                }
-            })
-            .collect::<Vec<_>>()
-    }
-}
-
-// Like Benchmark except there is just one audit step
-// instead of a vector of them.
-#[derive(Debug)]
-struct BenchmarkStep {
-    section: String,
-    description: String,
-    audit: AuditStep,
-    mode: Option<Mode>,
-    skip: Option<String>,
-}
 
 #[derive(Debug, RustcEncodable)]
 struct BenchmarkResult {
@@ -50,6 +25,8 @@ struct BenchmarkResult {
 pub enum AuditError {
     CsvError(csv::Error),
     IoError(io::Error),
+    RegexError(regex::Error),
+    StringError(string::FromUtf8Error),
     YamlError(serde_yaml::Error),
     NonCompliant,
 }
@@ -57,6 +34,18 @@ pub enum AuditError {
 impl From<csv::Error> for AuditError {
     fn from(err: csv::Error) -> AuditError {
         AuditError::CsvError(err)
+    }
+}
+
+impl From<regex::Error> for AuditError {
+    fn from(err: regex::Error) -> AuditError {
+        AuditError::RegexError(err)
+    }
+}
+
+impl From<string::FromUtf8Error> for AuditError {
+    fn from(err: string::FromUtf8Error) -> AuditError {
+        AuditError::StringError(err)
     }
 }
 
@@ -72,7 +61,7 @@ fn load_benchmarks(path: &str) -> Result<Vec<Benchmark>, AuditError> {
     open(path).and_then(parse)
 }
 
-fn run_script(script: String) -> Result<process::Output, AuditError> {
+fn run_script(script: &String) -> Result<process::Output, AuditError> {
     process::Command::new("/bin/sh")
         .arg("-c")
         .arg(script)
@@ -83,32 +72,65 @@ fn run_script(script: String) -> Result<process::Output, AuditError> {
         .and_then(|child| child.wait_with_output().map_err(AuditError::IoError))
 }
 
-fn run_benchmark(step: &BenchmarkStep) -> Result<BenchmarkResult, AuditError> {
-    let script = step.audit.run.clone();
-    run_script(script).and_then(|output| {
-        Ok(BenchmarkResult {
+fn is_success(output: &process::Output, expect: &Option<String>)
+              -> Result<bool, AuditError> {
+    println!("{:?}", expect);
+    let stdout_matches = match expect {
+        &Some(ref pattern) => {
+            let re = regex::Regex::new(&pattern)?;
+            let stdout = String::from_utf8(output.stdout.clone())?;
+            let is_match = re.is_match(&stdout.to_string());
+            println!("{:?}", is_match);
+            is_match
+        },
+        &None => true
+    };
+    Ok(stdout_matches && output.status.success())
+}
+
+fn run_benchmark(step: &Benchmark) -> Result<Vec<BenchmarkResult>, AuditError> {
+    let mut outputs = Vec::new();
+    for audit in step.audit.iter() {
+        let run = audit.run.clone();
+        let output = run_script(&run)?;
+        let success = is_success(&output, &audit.expect)?;
+        outputs.push((run, output, success));
+    }
+
+    let mode = step.mode.unwrap_or(Mode::All);
+    let should_skip = step.skip.is_some();
+    let passed = should_skip || match mode {
+        Mode::All => outputs.iter().all(|&(_, _, ref success)| *success),
+        Mode::Any => outputs.iter().any(|&(_, _, ref success)| *success),
+    };
+
+    let results = outputs.iter().map(|&(ref run, ref output, _)| {
+        BenchmarkResult {
             section: step.section.clone(),
             description: step.description.clone(),
-            run: step.audit.run.clone(),
-            passed: output.status.success(),
+            run: run.to_string(),
+            passed: passed,
             output: String::from_utf8(output.stdout.clone()).ok(),
             error: String::from_utf8(output.stderr.clone()).ok(),
             skip: step.skip.clone(),
-        })
-    })
+        }
+    }).collect::<Vec<_>>();
+
+    Ok(results)
 }
 
-fn run_benchmarks(steps: &Vec<BenchmarkStep>) -> Result<Vec<BenchmarkResult>, AuditError> {
+fn run_benchmarks(benchmarks: &Vec<Benchmark>) -> Result<Vec<BenchmarkResult>, AuditError> {
     let mut results = Vec::new();
-    for step in steps {
-        let result = run_benchmark(&step)?;
-        results.push(result);
+    for benchmark in benchmarks {
+        for result in run_benchmark(&benchmark)? {
+            results.push(result);
+        }
     }
     Ok(results)
 }
 
-fn write_report(results: &Vec<BenchmarkResult>) -> Result<(), AuditError> {
-    let mut writer = csv::Writer::from_file(path::Path::new("results.csv"))?;
+fn write_report(results: &Vec<BenchmarkResult>, output: &str) -> Result<(), AuditError> {
+    let mut writer = csv::Writer::from_file(path::Path::new(output))?;
     let headers = vec![
         "Section", "Description", "Run", "Passed", "Output", "Error", "Skip"
     ];
@@ -119,15 +141,10 @@ fn write_report(results: &Vec<BenchmarkResult>) -> Result<(), AuditError> {
     Ok(())
 }
 
-pub fn run_scan(spec: &str) -> Result<(), AuditError> {
+pub fn run_scan(spec: &str, output: &str) -> Result<(), AuditError> {
     load_benchmarks(spec)
-        .and_then(|benchmarks| {
-            // Flatten benchmarks with multiple steps into a vector of
-            // single benchmark steps, for uniform error handling.
-            Ok(benchmarks.iter().flat_map(|b| b.expand()).collect::<Vec<_>>())
-        })
-        .and_then(|steps| run_benchmarks(&steps))
-        .and_then(|results| write_report(&results).and(Ok(results)))
+        .and_then(|benchmarks| run_benchmarks(&benchmarks))
+        .and_then(|results| write_report(&results, output).and(Ok(results)))
         .and_then(|results| {
             let passed = results.iter().all(|r| r.passed);
             match passed {

@@ -9,7 +9,7 @@ use saytshen::scan;
 
 fn main() {
     let app = App::new("saytshen")
-        .version("1.0")
+        .version(saytshen::VERSION)
         .author("Joseph Wright <rjosephwright@gmail.com>")
         .about("Scans systems for compliance")
         .subcommand(SubCommand::with_name("scan")
@@ -17,13 +17,26 @@ fn main() {
                          .short("s")
                          .long("spec")
                          .takes_value(true)
-                         .help("Specification for scan")));
+                         .required(true)
+                         .help("Specification for scan"))
+                    .arg(Arg::with_name("output")
+                         .short("o")
+                         .long("output")
+                         .takes_value(true)
+                         .default_value("report.csv")
+                         .help("Output file for report")));
 
     let matches = app.get_matches();
     matches.subcommand_matches("scan")
-        .and_then(|scan| scan.value_of("spec"))
-        .map(|spec| {
-            match scan::run_scan(spec) {
+        .and_then(|scan| {
+            // unwrap() should be safe here because clap handles
+            // missing arguments or provides default values.
+            let spec = scan.value_of("spec").unwrap();
+            let output = scan.value_of("output").unwrap();
+            Some((spec, output))
+        })
+        .map(|(spec, output)| {
+            match scan::run_scan(spec, output) {
                 Err(scan::AuditError::NonCompliant) => {
                     exit(1)
                 },
