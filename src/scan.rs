@@ -1,10 +1,11 @@
-use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::path;
 use std::process;
+use std::string;
 
 use csv;
+use regex;
 use serde_yaml;
 
 include!(concat!(env!("OUT_DIR"), "/serde_types.rs"));
@@ -24,6 +25,8 @@ struct BenchmarkResult {
 pub enum AuditError {
     CsvError(csv::Error),
     IoError(io::Error),
+    RegexError(regex::Error),
+    StringError(string::FromUtf8Error),
     YamlError(serde_yaml::Error),
     NonCompliant,
 }
@@ -31,6 +34,18 @@ pub enum AuditError {
 impl From<csv::Error> for AuditError {
     fn from(err: csv::Error) -> AuditError {
         AuditError::CsvError(err)
+    }
+}
+
+impl From<regex::Error> for AuditError {
+    fn from(err: regex::Error) -> AuditError {
+        AuditError::RegexError(err)
+    }
+}
+
+impl From<string::FromUtf8Error> for AuditError {
+    fn from(err: string::FromUtf8Error) -> AuditError {
+        AuditError::StringError(err)
     }
 }
 
@@ -57,26 +72,43 @@ fn run_script(script: &String) -> Result<process::Output, AuditError> {
         .and_then(|child| child.wait_with_output().map_err(AuditError::IoError))
 }
 
+fn is_success(output: &process::Output, expect: &Option<String>)
+              -> Result<bool, AuditError> {
+    println!("{:?}", expect);
+    let stdout_matches = match expect {
+        &Some(ref pattern) => {
+            let re = regex::Regex::new(&pattern)?;
+            let stdout = String::from_utf8(output.stdout.clone())?;
+            let is_match = re.is_match(&stdout.to_string());
+            println!("{:?}", is_match);
+            is_match
+        },
+        &None => true
+    };
+    Ok(stdout_matches && output.status.success())
+}
+
 fn run_benchmark(step: &Benchmark) -> Result<Vec<BenchmarkResult>, AuditError> {
-    let scripts = step.audit.iter().map(|a| &a.run);
-    let mut outputs = HashMap::new();
-    for script in scripts {
-        let output = run_script(script)?;
-        outputs.insert(script, output);
+    let mut outputs = Vec::new();
+    for audit in step.audit.iter() {
+        let run = audit.run.clone();
+        let output = run_script(&run)?;
+        let success = is_success(&output, &audit.expect)?;
+        outputs.push((run, output, success));
     }
 
     let mode = step.mode.unwrap_or(Mode::All);
     let should_skip = step.skip.is_some();
     let passed = should_skip || match mode {
-        Mode::All => outputs.values().all(|o| o.status.success()),
-        Mode::Any => outputs.values().any(|o| o.status.success()),
+        Mode::All => outputs.iter().all(|&(_, _, ref success)| *success),
+        Mode::Any => outputs.iter().any(|&(_, _, ref success)| *success),
     };
 
-    let results = outputs.iter().map(|(script, output)| {
+    let results = outputs.iter().map(|&(ref run, ref output, _)| {
         BenchmarkResult {
             section: step.section.clone(),
             description: step.description.clone(),
-            run: script.to_string(),
+            run: run.to_string(),
             passed: passed,
             output: String::from_utf8(output.stdout.clone()).ok(),
             error: String::from_utf8(output.stderr.clone()).ok(),
