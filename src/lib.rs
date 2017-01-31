@@ -11,6 +11,6 @@ mod tests {
     }
 }
 
-pub const VERSION: &'static str = "0.1.0";
+pub const VERSION: &'static str = env!("CARGO_PKG_VERSION");
 
 pub mod scan;
