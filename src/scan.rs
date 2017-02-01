@@ -74,13 +74,11 @@ fn run_script(script: &String) -> Result<process::Output, AuditError> {
 
 fn is_success(output: &process::Output, expect: &Option<String>)
               -> Result<bool, AuditError> {
-    println!("{:?}", expect);
     let stdout_matches = match expect {
         &Some(ref pattern) => {
             let re = regex::Regex::new(&pattern)?;
             let stdout = String::from_utf8(output.stdout.clone())?;
             let is_match = re.is_match(&stdout.to_string());
-            println!("{:?}", is_match);
             is_match
         },
         &None => true
